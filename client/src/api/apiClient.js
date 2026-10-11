@@ -29,4 +29,46 @@ export const checkApiHealth = async () => {
   }
 };
 
+/**
+ * Fetches published businesses for marketplace discovery
+ * @param {Object} params - Query params (q, industry, stage, country, minFunding, maxFunding, page, limit, sortBy, order)
+ * @param {string} [token] - Optional JWT token for authenticated investor
+ */
+export const getBusinesses = async (params = {}, token = null) => {
+  try {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await apiClient.get('/businesses', { params, headers });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Failed to fetch businesses'
+    };
+  }
+};
+
+/**
+ * Fetches single business profile by ID
+ * @param {string} id - Business ID
+ * @param {string} [token] - Optional JWT token
+ */
+export const getBusinessById = async (id, token = null) => {
+  try {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await apiClient.get(`/businesses/${id}`, { headers });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Failed to fetch business details'
+    };
+  }
+};
+
 export default apiClient;

@@ -56,6 +56,12 @@ MeuLink bridges the gap between early-stage companies and capital providers:
 - **Dedicated Publication Control**: `PATCH /api/businesses/me/publish` allows founders to publish or unpublish their profile with strict boolean validation, requiring core fields before publication.
 - **Strict Role-Based Guardrails**: Non-business accounts (such as investors) receive HTTP 403 Forbidden on all business profile management endpoints.
 
+### Stage 5: Business Discovery, Search, Filters & Pagination
+- **Investor Marketplace Listing**: `GET /api/businesses` allows verified investors to browse published businesses (`isPublished: true`).
+- **Flexible & Safe Filtering**: Combines full-text search `q` (with regex special character escaping), exact filters (`industry`, `stage`, `country`), and numeric funding range filters (`minFunding`, `maxFunding`).
+- **Deterministic Pagination & Sorting**: Implements `skip`, `limit` (max 50, default 12), and sorting (`createdAt`, `fundingGoal`, `name`) with `_id` tie-breaker. Returns clean metadata (`page`, `limit`, `total`, `totalPages`).
+- **Role-Based Private Field Protection**: Detail view (`GET /api/businesses/:id`) exposes `privatePitchLink` and `contactEmail` only to the owner or an investor with an `accepted` Interest status. All public listing responses strictly omit private fields.
+
 ---
 
 ## Project Structure
@@ -115,6 +121,7 @@ MeuLink/
 │   ├── tests/
 │   │   ├── auth.middleware.test.js
 │   │   ├── auth.routes.test.js
+│   │   ├── business.discovery.test.js
 │   │   ├── business.routes.test.js
 │   │   ├── health.test.js
 │   │   ├── jwt.test.js
@@ -162,15 +169,15 @@ Returns the authenticated user's details without password hashes.
 
 ### 2. Business Profile Endpoints (`/api/businesses`)
 
-*All business endpoints require `Authorization: Bearer <token>` with a user having `role: "business"`.*
-
 #### `GET /api/businesses/me`
+Requires `role: "business"`.
 Retrieves the authenticated founder's business profile.
 - **HTTP 200**: Profile exists; returns complete profile including `privatePitchLink` and `contactEmail`.
 - **HTTP 404**: Profile has not yet been created for this founder.
-- **HTTP 403**: Caller does not have the `business` role (e.g., investor).
+- **HTTP 403**: Caller does not have the `business` role.
 
 #### `PUT /api/businesses/me`
+Requires `role: "business"`.
 Upsert endpoint creating or updating the authenticated founder's single business profile.
 ```json
 // Request Body Example
@@ -190,10 +197,11 @@ Upsert endpoint creating or updating the authenticated founder's single business
 }
 ```
 - **HTTP 201 Created**: Profile was created (`isPublished` defaults to `false`).
-- **HTTP 200 OK**: Profile was updated (existing `isPublished` value is strictly preserved).
-- **HTTP 400 Bad Request**: Validation failure (e.g., negative funding goal, invalid email format).
+- **HTTP 200 OK**: Profile was updated (`isPublished` value is strictly preserved).
+- **HTTP 400 Bad Request**: Validation failure.
 
 #### `PATCH /api/businesses/me/publish`
+Requires `role: "business"`.
 Toggles publication visibility for the founder's profile.
 ```json
 // Request Body Example
@@ -201,28 +209,81 @@ Toggles publication visibility for the founder's profile.
   "isPublished": true
 }
 ```
-- **HTTP 200 OK**: Publication status updated.
-- **HTTP 404 Not Found**: Business profile does not exist yet.
-- **HTTP 400 Bad Request**: Cannot publish an incomplete profile or invalid non-boolean payload.
 
 ---
 
-## Profile Updates vs. Publishing
+### 3. Marketplace Discovery Endpoints (`/api/businesses`)
 
-| Action | HTTP Method & Route | Purpose | Behavior on `isPublished` |
+#### `GET /api/businesses`
+Marketplace listing for verified investors (`role: "investor"`). Only returns published ventures (`isPublished: true`). Private fields (`privatePitchLink`, `contactEmail`) are **never** returned.
+
+**Supported Query Parameters:**
+| Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| **Profile Upsert** | `PUT /api/businesses/me` | Updates company metrics, pitch, description, contact | **Preserved**: If unpublished, stays unpublished. If published, stays published. Initial creation defaults to `false`. |
-| **Publish Toggle** | `PATCH /api/businesses/me/publish` | Toggles marketplace visibility | **Explicit Change**: Sets `isPublished` to `true` or `false` based on verified request body. |
+| `q` | `string` | - | Case-insensitive search text across `name`, `tagline`, and `description` (regex special chars safely escaped). |
+| `industry`| `string` | - | Exact industry filter (e.g. `CleanTech`, `FinTech`). |
+| `stage` | `string` | - | Exact funding stage filter (e.g. `Seed`, `Series A`). |
+| `country` | `string` | - | Country filter (e.g. `Portugal`, `India`). |
+| `minFunding`| `number` | - | Minimum funding goal amount (`>= minFunding`). Must be `<= maxFunding`. |
+| `maxFunding`| `number` | - | Maximum funding goal amount (`<= maxFunding`). |
+| `page` | `number` | `1` | Page number (min 1). |
+| `limit` | `number` | `12` | Items per page (min 1, max 50). |
+| `sortBy` | `string` | `createdAt` | Sort field: `createdAt`, `fundingGoal`, or `name`. |
+| `order` | `string` | `desc` | Sort direction: `asc` or `desc`. |
+
+**Example Request:**
+```http
+GET /api/businesses?industry=CleanTech&country=Portugal&minFunding=100000&maxFunding=1000000&page=1&limit=12&sortBy=fundingGoal&order=asc
+Authorization: Bearer <investor_token>
+```
+
+**Response Example (HTTP 200 OK):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "65f01234567890abcdef0001",
+      "name": "EcoEnergy Labs",
+      "tagline": "Solar and flow-battery storage solutions",
+      "description": "Next generation commercial clean energy storage systems for urban power grids.",
+      "industry": "CleanTech",
+      "country": "Portugal",
+      "city": "Lisbon",
+      "stage": "Seed",
+      "revenueRange": "€50k - €200k ARR",
+      "fundingGoal": 500000,
+      "purpose": "R&D expansion and CE certification testing",
+      "createdAt": "2026-01-10T10:00:00.000Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 12,
+    "total": 1,
+    "totalPages": 1
+  }
+}
+```
+
+#### `GET /api/businesses/:id`
+Authenticated detail endpoint for a single business profile.
+
+**Privacy & Access Rules:**
+1. **Unpublished Businesses**: Return HTTP 404 to all non-owners (including investors). Only the verified profile owner can view their own unpublished profile.
+2. **Private Fields (`privatePitchLink`, `contactEmail`)**:
+   - **Exposed to**: The profile owner, OR an investor whose `Interest` document for this business has `status: "accepted"`.
+   - **Hidden from**: Investors without an interest, or with interests in `pending` or `declined` states.
 
 ---
 
 ## Authorization & Security Rules
 
-- **Strict Identity Derivation**: Profile ownership is always derived from the verified token's `sub` claim (`req.user._id`). The client cannot specify an owner in the body or query parameter.
+- **Identity Derivation**: Profile ownership is always derived from the verified token's `sub` claim (`req.user._id`).
 - **HTTP 401 vs. HTTP 403**:
   - `HTTP 401 Unauthorized`: Missing, expired, or invalid Bearer token.
-  - `HTTP 403 Forbidden`: Authenticated as an `investor` trying to call founder-only routes (`/api/businesses/me`).
-- **Field Whitelisting**: Handlers selectively extract editable properties, discarding injected fields like `_id`, `owner`, or `isPublished`.
+  - `HTTP 403 Forbidden`: Authenticated user lacks the required role (e.g. founder accessing investor-only `/api/businesses` list).
+- **Injection Defense**: Regex query parameters are strictly escaped using `escapeRegex()`, protecting MongoDB queries from ReDoS or injection patterns.
 
 ---
 
@@ -275,6 +336,7 @@ All unit and integration tests execute completely offline without mutating remot
   npm test
   ```
   Included test suites:
+  - `tests/business.discovery.test.js`: 17 Supertest tests verifying marketplace listing, search regex safety, multi-field filtering, funding goal range validation, pagination metadata, sorting, detail view access, and role-based private field exposure.
   - `tests/business.routes.test.js`: 14 Supertest tests verifying 401/403 authorization, 201 creation, 200 update upsert, isolation between owners, field injection prevention, validation, and publication toggling.
   - `tests/auth.routes.test.js`: Supertest integration tests for `register`, `login`, `me`, password hashing, duplicate detection, and sanitization.
   - `tests/auth.middleware.test.js`: Unit tests for `authenticate` and `authorize` middleware covering 401/403 scenarios.
@@ -294,8 +356,8 @@ All unit and integration tests execute completely offline without mutating remot
 2. **Stage 2 (Completed)**: Database Connection (MongoDB Atlas & Mongoose Models for User, Business, Interest)
 3. **Stage 3 (Completed)**: Data Validation & Authentication Layer (JWT, bcrypt password hashing, Zod schemas, role-based authorization)
 4. **Stage 4 (Completed)**: Business Profile Management (Owner profile CRUD, safe upsert, and publish controls)
-5. **Stage 5**: Business Profile API Polish & Public Profiles (Preparation for marketplace consumption)
-6. **Stage 6**: Marketplace Discovery & Search (Filterable marketplace listings for investors)
+5. **Stage 5 (Completed)**: Business Discovery, Search, Filters & Pagination (Marketplace listing, safe search, filters, private field gating)
+6. **Stage 6**: Saved Businesses API (Investor bookmarking functionality)
 7. **Stage 7**: Expressions of Interest API (Investor connection workflow & notifications)
 8. **Stage 8**: Frontend Dashboard & Role Views (Business management & Investor discovery views)
 9. **Stage 9**: Seed Script & Demo Data Generation
@@ -313,4 +375,4 @@ Use the table below to document tasks completed with AI assistance:
 | *Stage 2 MongoDB Connection & Schemas* | *Antigravity* | *Verified Mongoose 8 connectDB without leaks, server.js startup ordering, User/Business/Interest models, and compound index declaration* | *Ran Jest model test suite (15 tests passing) and verified offline execution* |
 | *Stage 3 JWT Authentication & Role Authorization* | *Antigravity* | *Verified Zod schemas, pre-save bcrypt hashing, select: false password protection, JWT signing/verifying with sub claim, authenticate and authorize('business', 'investor') middleware, and 401/403/409 error mapping* | *Executed 39 Jest tests across 5 suites (100% passing) and verified Vite production build* |
 | *Stage 4 Business Profile Management* | *Antigravity* | *Implemented GET/PUT/PATCH owner profile routes, Zod validation, safe upsert logic preserving isPublished, owner ID lock to req.user._id, and investor 403 access control* | *Executed 53 Jest tests across 6 suites (100% passing) and verified Vite production build* |
-| *Task 5* | | | |
+| *Stage 5 Business Discovery & Search* | *Antigravity* | *Implemented GET /api/businesses with Zod query validation, safe regex escaping, multi-field filters, pagination metadata, and GET /api/businesses/:id with private field gating (owner vs accepted investor)* | *Executed 76 Jest tests across 7 suites (100% passing) and verified Vite production build* |

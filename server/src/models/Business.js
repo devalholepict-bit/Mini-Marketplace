@@ -5,9 +5,9 @@ const mongoose = require('mongoose');
  * Represents a business profile published by a founder seeking investment.
  * 
  * NOTE ON PRIVATE FIELDS:
- * Fields like `privatePitchLink` are stored in this model but MUST be filtered out
- * by backend controller/serialization logic in later stages for unauthenticated or
- * unauthorized requests. Never rely solely on client-side protection.
+ * Fields like `privatePitchLink` and `contactEmail` are private.
+ * In Stage 5 discovery and detail responses, they are filtered out unless the requester
+ * is the profile owner or an investor with an accepted interest request.
  */
 const businessSchema = new mongoose.Schema(
   {
@@ -38,7 +38,6 @@ const businessSchema = new mongoose.Schema(
       type: String,
       required: [true, 'Industry is required'],
       trim: true
-      // Flexible string; validated at API level in upcoming stages rather than hard-coded enum
     },
     country: {
       type: String,
@@ -54,13 +53,11 @@ const businessSchema = new mongoose.Schema(
       type: String,
       required: [true, 'Stage is required'],
       trim: true
-      // Flexible string; validated at API level
     },
     revenueRange: {
       type: String,
       required: [true, 'Revenue range is required'],
       trim: true
-      // Flexible string; validated at API level
     },
     fundingGoal: {
       type: Number,
@@ -93,6 +90,12 @@ const businessSchema = new mongoose.Schema(
     timestamps: true
   }
 );
+
+// Indexes optimizing marketplace queries
+businessSchema.index({ isPublished: 1, createdAt: -1 });
+businessSchema.index({ isPublished: 1, industry: 1 });
+businessSchema.index({ isPublished: 1, stage: 1 });
+businessSchema.index({ isPublished: 1, fundingGoal: 1 });
 
 // Prevent duplicate model compilation in test environments
 module.exports = mongoose.models.Business || mongoose.model('Business', businessSchema);

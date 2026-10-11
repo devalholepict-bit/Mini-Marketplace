@@ -79,7 +79,72 @@ const publishSchema = z.object({
   })
 });
 
+/**
+ * Validation schema for marketplace query parameters (GET /api/businesses)
+ */
+const businessQuerySchema = z
+  .object({
+    q: z.string().trim().optional(),
+    industry: z.string().trim().optional(),
+    stage: z.string().trim().optional(),
+    country: z.string().trim().optional(),
+    minFunding: z.coerce
+      .number({ invalid_type_error: 'minFunding must be a valid number' })
+      .positive('minFunding must be a positive number greater than 0')
+      .finite('minFunding must be a finite number')
+      .optional(),
+    maxFunding: z.coerce
+      .number({ invalid_type_error: 'maxFunding must be a valid number' })
+      .positive('maxFunding must be a positive number greater than 0')
+      .finite('maxFunding must be a finite number')
+      .optional(),
+    page: z.coerce
+      .number({ invalid_type_error: 'page must be a number' })
+      .int('page must be an integer')
+      .min(1, 'page must be at least 1')
+      .default(1),
+    limit: z.coerce
+      .number({ invalid_type_error: 'limit must be a number' })
+      .int('limit must be an integer')
+      .min(1, 'limit must be at least 1')
+      .max(50, 'limit cannot exceed 50')
+      .default(12),
+    sortBy: z
+      .enum(['createdAt', 'fundingGoal', 'name'], {
+        errorMap: () => ({ message: "sortBy must be one of: 'createdAt', 'fundingGoal', 'name'" })
+      })
+      .default('createdAt'),
+    order: z
+      .enum(['asc', 'desc'], {
+        errorMap: () => ({ message: "order must be either 'asc' or 'desc'" })
+      })
+      .default('desc')
+  })
+  .refine(
+    (data) => {
+      if (data.minFunding !== undefined && data.maxFunding !== undefined) {
+        return data.minFunding <= data.maxFunding;
+      }
+      return true;
+    },
+    {
+      message: 'minFunding cannot be greater than maxFunding',
+      path: ['minFunding']
+    }
+  );
+
+/**
+ * Validation schema for business detail ID param (GET /api/businesses/:id)
+ */
+const businessIdParamSchema = z.object({
+  id: z
+    .string({ required_error: 'Business ID is required' })
+    .regex(/^[0-9a-fA-F]{24}$/, 'Invalid business ID format. Expected a 24-character hexadecimal ObjectId')
+});
+
 module.exports = {
   businessProfileSchema,
-  publishSchema
+  publishSchema,
+  businessQuerySchema,
+  businessIdParamSchema
 };
