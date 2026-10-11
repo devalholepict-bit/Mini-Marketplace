@@ -41,13 +41,20 @@ MeuLink bridges the gap between early-stage companies and capital providers:
   - `Interest`: Compound unique index on `{ investor: 1, business: 1 }` preventing duplicate submissions, plus query indexes for investor history and business status lookups
 
 ### Stage 3: JWT Authentication & Role-Based Authorization
-- **Zod Validation Layer**: Dedicated schemas for registration and login payloads, rejecting malformed inputs with HTTP 400 before reaching business logic.
+- **Zod Validation Layer**: Dedicated schemas for registration and login payloads, rejecting malformed inputs with HTTP 400.
 - **Bcrypt Password Security**: Automatic pre-save hashing with salt rounds of 10, guarded by `this.isModified('password')` to prevent accidental double-hashing. Plaintext passwords are never persisted.
-- **Credential Protection**: User model enforces `select: false` on the password field; login explicitly requests `.select('+password')` for verification. All responses return sanitized user representations via `user.toSafeObject()`.
-- **Duplicate Email Handling**: Returns generic HTTP 409 Conflict without revealing database specifics.
+- **Credential Protection**: User model enforces `select: false` on password; login explicitly requests `.select('+password')`. All responses return sanitized user representations via `user.toSafeObject()`.
 - **Cryptographic JWT Utility**: Signs minimum claims (`sub` = user ID, `role`) using HMAC SHA-256 with environment-configured secret (`JWT_SECRET`) and expiration (`JWT_EXPIRES_IN`). Verified via `jwt.verify()`.
-- **Reusable `authenticate` Middleware**: Enforces `Bearer <token>` HTTP Authorization header, verifies signature and expiration, retrieves active user, and attaches sanitized entity to `req.user`.
-- **Reusable `authorize(...allowedRoles)` Middleware**: Enforces role access control across endpoints (`business`, `investor`).
+- **Reusable `authenticate` & `authorize` Middleware**: Enforces Bearer JWT verification and role-based permissions (`business`, `investor`).
+
+### Stage 4: Business Profile Management
+- **Owner-Locked Profile Retrieval**: `GET /api/businesses/me` returns the complete profile (including owner-only `privatePitchLink` and `contactEmail`) for the authenticated founder.
+- **Safe Upsert Lifecycle**: `PUT /api/businesses/me` creates (HTTP 201) or updates (HTTP 200) the founder's single profile.
+  - Strictly derives `owner` from verified JWT identity (`req.user._id`), never trusting client-supplied IDs.
+  - Applies an explicit allowlist of editable fields, preventing injection of `_id`, `owner`, or database operators.
+  - Preserves existing publication state (`isPublished`) across profile edits; defaults to `false` on initial creation.
+- **Dedicated Publication Control**: `PATCH /api/businesses/me/publish` allows founders to publish or unpublish their profile with strict boolean validation, requiring core fields before publication.
+- **Strict Role-Based Guardrails**: Non-business accounts (such as investors) receive HTTP 403 Forbidden on all business profile management endpoints.
 
 ---
 
@@ -82,6 +89,7 @@ MeuLink/
 │   │   │   └── db.js
 │   │   ├── controllers/
 │   │   │   ├── auth.controller.js
+│   │   │   ├── business.controller.js
 │   │   │   └── health.controller.js
 │   │   ├── middleware/
 │   │   │   ├── auth.middleware.js
@@ -94,17 +102,20 @@ MeuLink/
 │   │   │   └── User.js
 │   │   ├── routes/
 │   │   │   ├── auth.routes.js
+│   │   │   ├── business.routes.js
 │   │   │   └── health.routes.js
 │   │   ├── seed/
 │   │   ├── utils/
 │   │   │   └── jwt.js
 │   │   ├── validators/
-│   │   │   └── auth.validator.js
+│   │   │   ├── auth.validator.js
+│   │   │   └── business.validator.js
 │   │   ├── app.js
 │   │   └── server.js
 │   ├── tests/
 │   │   ├── auth.middleware.test.js
 │   │   ├── auth.routes.test.js
+│   │   ├── business.routes.test.js
 │   │   ├── health.test.js
 │   │   ├── jwt.test.js
 │   │   └── models.test.js
@@ -117,17 +128,14 @@ MeuLink/
 
 ---
 
-## Authentication & Authorization API Reference
+## API Reference
 
-Base URL: `/api/auth`
+### 1. Authentication Endpoints (`/api/auth`)
 
-### 1. Register User
-`POST /api/auth/register`
-
-Creates a new user account, hashes password with bcrypt, and returns a signed JWT along with the sanitized user profile.
-
-**Request Body Example:**
+#### `POST /api/auth/register`
+Creates a new user account and returns a signed JWT along with the sanitized profile.
 ```json
+// Request
 {
   "name": "Jane Founder",
   "email": "jane@example.com",
@@ -136,97 +144,85 @@ Creates a new user account, hashes password with bcrypt, and returns a signed JW
 }
 ```
 
-**Response (HTTP 201 Created):**
+#### `POST /api/auth/login`
+Authenticates credentials and returns a fresh token.
 ```json
-{
-  "success": true,
-  "message": "User registered successfully",
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "user": {
-    "id": "67a7f4e902b4d91234567890",
-    "name": "Jane Founder",
-    "email": "jane@example.com",
-    "role": "business",
-    "createdAt": "2026-10-11T12:00:00.000Z",
-    "updatedAt": "2026-10-11T12:00:00.000Z"
-  }
-}
-```
-
-*Errors*:
-- `HTTP 400 Bad Request`: Validation failure (e.g. password < 8 characters, invalid email, or invalid role).
-- `HTTP 409 Conflict`: Email address is already registered.
-
----
-
-### 2. Login User
-`POST /api/auth/login`
-
-Validates user credentials against stored bcrypt hash and returns a fresh JWT.
-
-**Request Body Example:**
-```json
+// Request
 {
   "email": "jane@example.com",
   "password": "SecurePassword123!"
 }
 ```
 
-**Response (HTTP 200 OK):**
-```json
-{
-  "success": true,
-  "message": "Login successful",
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "user": {
-    "id": "67a7f4e902b4d91234567890",
-    "name": "Jane Founder",
-    "email": "jane@example.com",
-    "role": "business"
-  }
-}
-```
-
-*Errors*:
-- `HTTP 401 Unauthorized`: Generic error message (`"Invalid email or password"`) prevents email enumeration.
+#### `GET /api/auth/me`
+Header: `Authorization: Bearer <token>`
+Returns the authenticated user's details without password hashes.
 
 ---
 
-### 3. Get Current User Profile
-`GET /api/auth/me`
+### 2. Business Profile Endpoints (`/api/businesses`)
 
-Retrieves the currently authenticated user profile using the Bearer JWT.
+*All business endpoints require `Authorization: Bearer <token>` with a user having `role: "business"`.*
 
-**Request Headers:**
-```http
-Authorization: Bearer <your_jwt_token_here>
-```
+#### `GET /api/businesses/me`
+Retrieves the authenticated founder's business profile.
+- **HTTP 200**: Profile exists; returns complete profile including `privatePitchLink` and `contactEmail`.
+- **HTTP 404**: Profile has not yet been created for this founder.
+- **HTTP 403**: Caller does not have the `business` role (e.g., investor).
 
-**Response (HTTP 200 OK):**
+#### `PUT /api/businesses/me`
+Upsert endpoint creating or updating the authenticated founder's single business profile.
 ```json
+// Request Body Example
 {
-  "success": true,
-  "user": {
-    "id": "67a7f4e902b4d91234567890",
-    "name": "Jane Founder",
-    "email": "jane@example.com",
-    "role": "business",
-    "createdAt": "2026-10-11T12:00:00.000Z",
-    "updatedAt": "2026-10-11T12:00:00.000Z"
-  }
+  "name": "EcoEnergy Labs",
+  "tagline": "Next-gen solar storage technologies for modern grids",
+  "description": "We develop high-density flow batteries for commercial and residential energy storage.",
+  "industry": "CleanTech",
+  "country": "Portugal",
+  "city": "Lisbon",
+  "stage": "Seed",
+  "revenueRange": "€50k - €200k ARR",
+  "fundingGoal": 500000,
+  "purpose": "R&D expansion and CE certification testing",
+  "privatePitchLink": "https://dataroom.example.com/ecoenergy",
+  "contactEmail": "contact@ecoenergy.pt"
 }
 ```
+- **HTTP 201 Created**: Profile was created (`isPublished` defaults to `false`).
+- **HTTP 200 OK**: Profile was updated (existing `isPublished` value is strictly preserved).
+- **HTTP 400 Bad Request**: Validation failure (e.g., negative funding goal, invalid email format).
+
+#### `PATCH /api/businesses/me/publish`
+Toggles publication visibility for the founder's profile.
+```json
+// Request Body Example
+{
+  "isPublished": true
+}
+```
+- **HTTP 200 OK**: Publication status updated.
+- **HTTP 404 Not Found**: Business profile does not exist yet.
+- **HTTP 400 Bad Request**: Cannot publish an incomplete profile or invalid non-boolean payload.
 
 ---
 
-## Authentication vs. Authorization (HTTP 401 vs. HTTP 403)
+## Profile Updates vs. Publishing
 
-- **HTTP 401 Unauthorized ("Who are you?")**:
-  - Returned when authentication is missing, incomplete, expired, or invalid.
-  - Examples: No `Authorization` header provided, header not in `Bearer <token>` format, expired token signature, or invalid login credentials.
-- **HTTP 403 Forbidden ("You are not allowed here")**:
-  - Returned when the user is authenticated and their identity is verified, but their assigned role does not have permission to access the endpoint.
-  - Examples: An `investor` attempting to call a business owner modification endpoint guarded by `authorize('business')`.
+| Action | HTTP Method & Route | Purpose | Behavior on `isPublished` |
+| :--- | :--- | :--- | :--- |
+| **Profile Upsert** | `PUT /api/businesses/me` | Updates company metrics, pitch, description, contact | **Preserved**: If unpublished, stays unpublished. If published, stays published. Initial creation defaults to `false`. |
+| **Publish Toggle** | `PATCH /api/businesses/me/publish` | Toggles marketplace visibility | **Explicit Change**: Sets `isPublished` to `true` or `false` based on verified request body. |
+
+---
+
+## Authorization & Security Rules
+
+- **Strict Identity Derivation**: Profile ownership is always derived from the verified token's `sub` claim (`req.user._id`). The client cannot specify an owner in the body or query parameter.
+- **HTTP 401 vs. HTTP 403**:
+  - `HTTP 401 Unauthorized`: Missing, expired, or invalid Bearer token.
+  - `HTTP 403 Forbidden`: Authenticated as an `investor` trying to call founder-only routes (`/api/businesses/me`).
+- **Field Whitelisting**: Handlers selectively extract editable properties, discarding injected fields like `_id`, `owner`, or `isPublished`.
 
 ---
 
@@ -236,12 +232,6 @@ Authorization: Bearer <your_jwt_token_here>
 > **Security Reminder**: Never commit real database connection strings, passwords, or JWT secrets to Git. The `.gitignore` file is configured to exclude all `.env` files while tracking `.env.example` templates.
 
 ### Configuring Backend in `server/.env`
-
-Create a `server/.env` file in the `server/` directory:
-```bash
-cp server/.env.example server/.env
-```
-Template configuration:
 ```env
 PORT=5000
 CLIENT_URL=http://localhost:5173
@@ -251,10 +241,6 @@ JWT_EXPIRES_IN=1d
 ```
 
 ### Configuring Frontend in `client/.env`
-```bash
-cp client/.env.example client/.env
-```
-Default values:
 ```env
 VITE_API_URL=http://localhost:5000/api
 ```
@@ -282,16 +268,17 @@ From the project root:
 
 ## Testing & Production Build
 
-All unit and integration tests execute completely offline and do **not** mutate production or remote Atlas databases:
+All unit and integration tests execute completely offline without mutating remote Atlas databases:
 
 - **Run all backend tests:**
   ```bash
   npm test
   ```
   Included test suites:
+  - `tests/business.routes.test.js`: 14 Supertest tests verifying 401/403 authorization, 201 creation, 200 update upsert, isolation between owners, field injection prevention, validation, and publication toggling.
   - `tests/auth.routes.test.js`: Supertest integration tests for `register`, `login`, `me`, password hashing, duplicate detection, and sanitization.
   - `tests/auth.middleware.test.js`: Unit tests for `authenticate` and `authorize` middleware covering 401/403 scenarios.
-  - `tests/jwt.test.js`: Cryptographic signing, expiration, and verification verification.
+  - `tests/jwt.test.js`: Cryptographic signing, expiration, and verification.
   - `tests/models.test.js`: Schema validation, index declaration, and database error handling.
   - `tests/health.test.js`: Verifies `GET /api/health` status 200, ISO timestamp, and database state.
 - **Build frontend for production:**
@@ -306,8 +293,8 @@ All unit and integration tests execute completely offline and do **not** mutate 
 1. **Stage 1 (Completed)**: Project Scaffold, Monorepo Setup, Health Endpoint & Live UI Status Indicator
 2. **Stage 2 (Completed)**: Database Connection (MongoDB Atlas & Mongoose Models for User, Business, Interest)
 3. **Stage 3 (Completed)**: Data Validation & Authentication Layer (JWT, bcrypt password hashing, Zod schemas, role-based authorization)
-4. **Stage 4**: Role-Based Profile Flows & Authorization Protection
-5. **Stage 5**: Business Profile API (Full CRUD endpoints for venture listings)
+4. **Stage 4 (Completed)**: Business Profile Management (Owner profile CRUD, safe upsert, and publish controls)
+5. **Stage 5**: Business Profile API Polish & Public Profiles (Preparation for marketplace consumption)
 6. **Stage 6**: Marketplace Discovery & Search (Filterable marketplace listings for investors)
 7. **Stage 7**: Expressions of Interest API (Investor connection workflow & notifications)
 8. **Stage 8**: Frontend Dashboard & Role Views (Business management & Investor discovery views)
@@ -325,5 +312,5 @@ Use the table below to document tasks completed with AI assistance:
 | *Scaffold Stage 1 Health Check* | *Antigravity* | *Verified CommonJS exports, decoupled app.js/server.js, and error middleware* | *Ran Jest test suite and checked GET /api/health* |
 | *Stage 2 MongoDB Connection & Schemas* | *Antigravity* | *Verified Mongoose 8 connectDB without leaks, server.js startup ordering, User/Business/Interest models, and compound index declaration* | *Ran Jest model test suite (15 tests passing) and verified offline execution* |
 | *Stage 3 JWT Authentication & Role Authorization* | *Antigravity* | *Verified Zod schemas, pre-save bcrypt hashing, select: false password protection, JWT signing/verifying with sub claim, authenticate and authorize('business', 'investor') middleware, and 401/403/409 error mapping* | *Executed 39 Jest tests across 5 suites (100% passing) and verified Vite production build* |
-| *Task 4* | | | |
+| *Stage 4 Business Profile Management* | *Antigravity* | *Implemented GET/PUT/PATCH owner profile routes, Zod validation, safe upsert logic preserving isPublished, owner ID lock to req.user._id, and investor 403 access control* | *Executed 53 Jest tests across 6 suites (100% passing) and verified Vite production build* |
 | *Task 5* | | | |

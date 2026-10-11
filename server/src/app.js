@@ -4,6 +4,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const healthRoutes = require('./routes/health.routes');
 const authRoutes = require('./routes/auth.routes');
+const businessRoutes = require('./routes/business.routes');
 const { notFoundHandler, errorHandler } = require('./middleware/error.middleware');
 
 const app = express();
@@ -29,6 +30,7 @@ if (process.env.NODE_ENV !== 'test') {
 
 // API Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/businesses', businessRoutes);
 app.use('/api', healthRoutes);
 
 // 404 handler for unknown routes
