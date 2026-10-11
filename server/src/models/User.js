@@ -1,13 +1,9 @@
 const mongoose = require('mongoose');
+const bcrypt = require('bcrypt');
 
 /**
  * User Schema
  * Represents both business founders and prospective investors.
- * 
- * NOTE FOR FUTURE AUTHENTICATION LAYER (Stage 3):
- * Passwords must be hashed (e.g., using bcrypt) prior to saving in the database.
- * Never store plaintext passwords. The password field is configured with select: false
- * to prevent accidental exposure in query results.
  */
 const userSchema = new mongoose.Schema(
   {
@@ -27,7 +23,7 @@ const userSchema = new mongoose.Schema(
     password: {
       type: String,
       required: [true, 'Password is required'],
-      select: false
+      select: false // Excluded from default queries to prevent accidental credential leakage
     },
     role: {
       type: String,
@@ -51,6 +47,48 @@ const userSchema = new mongoose.Schema(
     timestamps: true
   }
 );
+
+/**
+ * Pre-save hook: Hash password with bcrypt before saving if it has been modified.
+ * Protects against accidental double-hashing when updating other user fields.
+ */
+userSchema.pre('save', async function (next) {
+  if (!this.isModified('password')) {
+    return next();
+  }
+
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Compares a candidate plaintext password with the hashed password in database.
+ * @param {string} candidatePassword
+ * @returns {Promise<boolean>}
+ */
+userSchema.methods.comparePassword = async function (candidatePassword) {
+  return bcrypt.compare(candidatePassword, this.password);
+};
+
+/**
+ * Returns a sanitized representation of the user, free of credential fields.
+ * @returns {Object}
+ */
+userSchema.methods.toSafeObject = function () {
+  return {
+    id: this._id,
+    name: this.name,
+    email: this.email,
+    role: this.role,
+    createdAt: this.createdAt,
+    updatedAt: this.updatedAt
+  };
+};
 
 // Prevent duplicate model compilation in test environments
 module.exports = mongoose.models.User || mongoose.model('User', userSchema);

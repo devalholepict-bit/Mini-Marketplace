@@ -40,6 +40,15 @@ MeuLink bridges the gap between early-stage companies and capital providers:
   - `Business`: 1-to-1 owner uniqueness constraint, positive funding goal validation, flexible industry/stage definitions, unpublished default
   - `Interest`: Compound unique index on `{ investor: 1, business: 1 }` preventing duplicate submissions, plus query indexes for investor history and business status lookups
 
+### Stage 3: JWT Authentication & Role-Based Authorization
+- **Zod Validation Layer**: Dedicated schemas for registration and login payloads, rejecting malformed inputs with HTTP 400 before reaching business logic.
+- **Bcrypt Password Security**: Automatic pre-save hashing with salt rounds of 10, guarded by `this.isModified('password')` to prevent accidental double-hashing. Plaintext passwords are never persisted.
+- **Credential Protection**: User model enforces `select: false` on the password field; login explicitly requests `.select('+password')` for verification. All responses return sanitized user representations via `user.toSafeObject()`.
+- **Duplicate Email Handling**: Returns generic HTTP 409 Conflict without revealing database specifics.
+- **Cryptographic JWT Utility**: Signs minimum claims (`sub` = user ID, `role`) using HMAC SHA-256 with environment-configured secret (`JWT_SECRET`) and expiration (`JWT_EXPIRES_IN`). Verified via `jwt.verify()`.
+- **Reusable `authenticate` Middleware**: Enforces `Bearer <token>` HTTP Authorization header, verifies signature and expiration, retrieves active user, and attaches sanitized entity to `req.user`.
+- **Reusable `authorize(...allowedRoles)` Middleware**: Enforces role access control across endpoints (`business`, `investor`).
+
 ---
 
 ## Project Structure
@@ -72,22 +81,32 @@ MeuLink/
 │   │   ├── config/
 │   │   │   └── db.js
 │   │   ├── controllers/
+│   │   │   ├── auth.controller.js
 │   │   │   └── health.controller.js
 │   │   ├── middleware/
-│   │   │   └── error.middleware.js
+│   │   │   ├── auth.middleware.js
+│   │   │   ├── authorize.middleware.js
+│   │   │   ├── error.middleware.js
+│   │   │   └── validate.middleware.js
 │   │   ├── models/
 │   │   │   ├── Business.js
 │   │   │   ├── Interest.js
 │   │   │   └── User.js
 │   │   ├── routes/
+│   │   │   ├── auth.routes.js
 │   │   │   └── health.routes.js
 │   │   ├── seed/
 │   │   ├── utils/
+│   │   │   └── jwt.js
 │   │   ├── validators/
+│   │   │   └── auth.validator.js
 │   │   ├── app.js
 │   │   └── server.js
 │   ├── tests/
+│   │   ├── auth.middleware.test.js
+│   │   ├── auth.routes.test.js
 │   │   ├── health.test.js
+│   │   ├── jwt.test.js
 │   │   └── models.test.js
 │   ├── .env.example
 │   └── package.json
@@ -98,28 +117,116 @@ MeuLink/
 
 ---
 
-## Database Architecture & Models
+## Authentication & Authorization API Reference
 
-### 1. User Model (`server/src/models/User.js`)
-- **Fields**: `name`, `email`, `password`, `role`, `savedBusinesses`, timestamps (`createdAt`, `updatedAt`).
-- **Indexes**: Unique index on `email` prevents multiple accounts per email.
-- **Security**: `password` is defined with `select: false` so hashes are omitted from default database queries.
-- **References**: `savedBusinesses` holds an array of `Business` ObjectIds bookmarked by investors.
-- *Note on Auth*: Password hashing via bcrypt will be applied in Stage 3 during user registration/login.
+Base URL: `/api/auth`
 
-### 2. Business Model (`server/src/models/Business.js`)
-- **Fields**: `owner`, `name`, `tagline`, `description`, `industry`, `country`, `city`, `stage`, `revenueRange`, `fundingGoal`, `purpose`, `isPublished`, `privatePitchLink`, `contactEmail`, timestamps.
-- **Indexes**: Unique index on `owner` enforces a strict 1-to-1 relationship—each founder can register at most one active business profile.
-- **Validation**: `fundingGoal` enforces a minimum value >= 1. Flexible string definitions for `industry` and `stage` allow API validation rules (Zod) to manage supported values cleanly.
-- **Private Fields**: `privatePitchLink` is persisted in the model and will be gated by backend authorization middleware in later stages.
+### 1. Register User
+`POST /api/auth/register`
 
-### 3. Interest Model (`server/src/models/Interest.js`)
-- **Fields**: `investor` (User ref), `business` (Business ref), `message`, `status` (`pending`, `accepted`, `declined`), timestamps.
-- **Compound Unique Index**: `{ investor: 1, business: 1 }` with `{ unique: true }`.
-  - **Constraint Behavior**: Mongoose's `unique` declaration configures a MongoDB engine-level index. In a live MongoDB Atlas instance, attempting to insert a duplicate expression of interest from the same investor to the same business triggers an `E11000` duplicate key error, which will be mapped to HTTP 409 Conflict in Stage 6.
-- **Query Indexes**:
-  - `{ investor: 1 }`: Optimized index for investors viewing their sent interest pipeline.
-  - `{ business: 1, status: 1 }`: Compound index for business founders filtering incoming pitches by status.
+Creates a new user account, hashes password with bcrypt, and returns a signed JWT along with the sanitized user profile.
+
+**Request Body Example:**
+```json
+{
+  "name": "Jane Founder",
+  "email": "jane@example.com",
+  "password": "SecurePassword123!",
+  "role": "business"
+}
+```
+
+**Response (HTTP 201 Created):**
+```json
+{
+  "success": true,
+  "message": "User registered successfully",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "67a7f4e902b4d91234567890",
+    "name": "Jane Founder",
+    "email": "jane@example.com",
+    "role": "business",
+    "createdAt": "2026-10-11T12:00:00.000Z",
+    "updatedAt": "2026-10-11T12:00:00.000Z"
+  }
+}
+```
+
+*Errors*:
+- `HTTP 400 Bad Request`: Validation failure (e.g. password < 8 characters, invalid email, or invalid role).
+- `HTTP 409 Conflict`: Email address is already registered.
+
+---
+
+### 2. Login User
+`POST /api/auth/login`
+
+Validates user credentials against stored bcrypt hash and returns a fresh JWT.
+
+**Request Body Example:**
+```json
+{
+  "email": "jane@example.com",
+  "password": "SecurePassword123!"
+}
+```
+
+**Response (HTTP 200 OK):**
+```json
+{
+  "success": true,
+  "message": "Login successful",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "67a7f4e902b4d91234567890",
+    "name": "Jane Founder",
+    "email": "jane@example.com",
+    "role": "business"
+  }
+}
+```
+
+*Errors*:
+- `HTTP 401 Unauthorized`: Generic error message (`"Invalid email or password"`) prevents email enumeration.
+
+---
+
+### 3. Get Current User Profile
+`GET /api/auth/me`
+
+Retrieves the currently authenticated user profile using the Bearer JWT.
+
+**Request Headers:**
+```http
+Authorization: Bearer <your_jwt_token_here>
+```
+
+**Response (HTTP 200 OK):**
+```json
+{
+  "success": true,
+  "user": {
+    "id": "67a7f4e902b4d91234567890",
+    "name": "Jane Founder",
+    "email": "jane@example.com",
+    "role": "business",
+    "createdAt": "2026-10-11T12:00:00.000Z",
+    "updatedAt": "2026-10-11T12:00:00.000Z"
+  }
+}
+```
+
+---
+
+## Authentication vs. Authorization (HTTP 401 vs. HTTP 403)
+
+- **HTTP 401 Unauthorized ("Who are you?")**:
+  - Returned when authentication is missing, incomplete, expired, or invalid.
+  - Examples: No `Authorization` header provided, header not in `Bearer <token>` format, expired token signature, or invalid login credentials.
+- **HTTP 403 Forbidden ("You are not allowed here")**:
+  - Returned when the user is authenticated and their identity is verified, but their assigned role does not have permission to access the endpoint.
+  - Examples: An `investor` attempting to call a business owner modification endpoint guarded by `authorize('business')`.
 
 ---
 
@@ -128,27 +235,20 @@ MeuLink/
 > [!IMPORTANT]
 > **Security Reminder**: Never commit real database connection strings, passwords, or JWT secrets to Git. The `.gitignore` file is configured to exclude all `.env` files while tracking `.env.example` templates.
 
-### Configuring MongoDB Atlas in `server/.env`
+### Configuring Backend in `server/.env`
 
-1. Create a `server/.env` file in the `server/` directory (you can copy the example template):
-   ```bash
-   cp server/.env.example server/.env
-   ```
-2. Open `server/.env` and replace `MONGODB_URI` with your MongoDB Atlas connection string:
-   ```env
-   # Server Port
-   PORT=5000
-
-   # Client Application URL for CORS
-   CLIENT_URL=http://localhost:5173
-
-   # MongoDB Atlas Connection URI
-   MONGODB_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/meulink?retryWrites=true&w=majority
-
-   # JWT Configuration (for Stage 3)
-   JWT_SECRET=your_jwt_secret_key_change_in_production
-   JWT_EXPIRES_IN=7d
-   ```
+Create a `server/.env` file in the `server/` directory:
+```bash
+cp server/.env.example server/.env
+```
+Template configuration:
+```env
+PORT=5000
+CLIENT_URL=http://localhost:5173
+MONGODB_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/meulink?retryWrites=true&w=majority
+JWT_SECRET=your_secure_256_bit_secret_key_here
+JWT_EXPIRES_IN=1d
+```
 
 ### Configuring Frontend in `client/.env`
 ```bash
@@ -169,7 +269,6 @@ From the project root:
   ```bash
   npm run dev
   ```
-  *(Requires valid `MONGODB_URI` in `server/.env` to start the backend server listener)*
 - **Start only the backend API server (`http://localhost:5000`):**
   ```bash
   npm run dev:server
@@ -183,15 +282,18 @@ From the project root:
 
 ## Testing & Production Build
 
-All unit and schema tests run completely offline and do **not** require a running MongoDB instance, network access, or Atlas credentials:
+All unit and integration tests execute completely offline and do **not** mutate production or remote Atlas databases:
 
 - **Run all backend tests:**
   ```bash
   npm test
   ```
   Included test suites:
-  - `tests/health.test.js`: Verifies `GET /api/health` status 200, ISO timestamp, 404 handler, and reported database readyState (`disconnected` in test mode).
-  - `tests/models.test.js`: Verifies `User`, `Business`, and `Interest` schema requirements, compound indexes, reference paths, and `connectDB` missing-URI error handling.
+  - `tests/auth.routes.test.js`: Supertest integration tests for `register`, `login`, `me`, password hashing, duplicate detection, and sanitization.
+  - `tests/auth.middleware.test.js`: Unit tests for `authenticate` and `authorize` middleware covering 401/403 scenarios.
+  - `tests/jwt.test.js`: Cryptographic signing, expiration, and verification verification.
+  - `tests/models.test.js`: Schema validation, index declaration, and database error handling.
+  - `tests/health.test.js`: Verifies `GET /api/health` status 200, ISO timestamp, and database state.
 - **Build frontend for production:**
   ```bash
   npm run build
@@ -203,8 +305,8 @@ All unit and schema tests run completely offline and do **not** require a runnin
 
 1. **Stage 1 (Completed)**: Project Scaffold, Monorepo Setup, Health Endpoint & Live UI Status Indicator
 2. **Stage 2 (Completed)**: Database Connection (MongoDB Atlas & Mongoose Models for User, Business, Interest)
-3. **Stage 3**: Data Validation & Authentication Layer (JWT, bcrypt password hashing, Zod schemas)
-4. **Stage 4**: Role-Based Authorization & User Profile Management (business vs investor flows)
+3. **Stage 3 (Completed)**: Data Validation & Authentication Layer (JWT, bcrypt password hashing, Zod schemas, role-based authorization)
+4. **Stage 4**: Role-Based Profile Flows & Authorization Protection
 5. **Stage 5**: Business Profile API (Full CRUD endpoints for venture listings)
 6. **Stage 6**: Marketplace Discovery & Search (Filterable marketplace listings for investors)
 7. **Stage 7**: Expressions of Interest API (Investor connection workflow & notifications)
@@ -222,6 +324,6 @@ Use the table below to document tasks completed with AI assistance:
 | :--- | :--- | :--- | :--- |
 | *Scaffold Stage 1 Health Check* | *Antigravity* | *Verified CommonJS exports, decoupled app.js/server.js, and error middleware* | *Ran Jest test suite and checked GET /api/health* |
 | *Stage 2 MongoDB Connection & Schemas* | *Antigravity* | *Verified Mongoose 8 connectDB without leaks, server.js startup ordering, User/Business/Interest models, and compound index declaration* | *Ran Jest model test suite (15 tests passing) and verified offline execution* |
-| *Task 3* | | | |
+| *Stage 3 JWT Authentication & Role Authorization* | *Antigravity* | *Verified Zod schemas, pre-save bcrypt hashing, select: false password protection, JWT signing/verifying with sub claim, authenticate and authorize('business', 'investor') middleware, and 401/403/409 error mapping* | *Executed 39 Jest tests across 5 suites (100% passing) and verified Vite production build* |
 | *Task 4* | | | |
 | *Task 5* | | | |
