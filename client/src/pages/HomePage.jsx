@@ -1,20 +1,47 @@
 import React from 'react';
-import Header from '../components/Header';
-import Hero from '../components/Hero';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import ApiStatus from '../components/ApiStatus';
 import RolesSection from '../components/RolesSection';
-import Footer from '../components/Footer';
 
+/**
+ * HomePage — Public landing page.
+ * Shows hero CTA that changes based on auth state, API status, and role cards.
+ */
 const HomePage = () => {
+  const { isAuthenticated } = useAuth();
+
   return (
     <>
-      <Header />
-      <main className="container" style={{ flex: '1' }}>
-        <Hero />
-        <ApiStatus />
-        <RolesSection />
-      </main>
-      <Footer />
+      <section className="hero">
+        <div className="container">
+          <p className="hero-tagline">Early-Stage Capital Marketplace</p>
+          <h1 className="hero-title">Connecting Growing Businesses with Strategic Investors</h1>
+          <p className="hero-description">
+            MeuLink is a modern marketplace where businesses seeking growth funding can publish
+            company profiles, metrics, and pitches, while investors discover high-potential opportunities
+            and express investment interest.
+          </p>
+          <div className="hero-actions">
+            {isAuthenticated ? (
+              <Link to="/dashboard" className="btn btn-primary btn-lg">
+                Go to Dashboard
+              </Link>
+            ) : (
+              <>
+                <Link to="/register" className="btn btn-primary btn-lg">
+                  Get Started
+                </Link>
+                <Link to="/login" className="btn btn-outline btn-lg">
+                  Sign In
+                </Link>
+              </>
+            )}
+          </div>
+        </div>
+      </section>
+      <ApiStatus />
+      <RolesSection />
     </>
   );
 };

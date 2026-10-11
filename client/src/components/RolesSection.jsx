@@ -7,7 +7,7 @@ const RolesSection = () => {
       icon: '🏢',
       title: 'Business (Founder)',
       description: 'Founders and enterprise operators seeking capital, mentorship, and growth partnerships.',
-      highlightColor: '#2563eb',
+      highlightColor: '#0A0A0A',
       features: [
         'Create and update comprehensive business profiles',
         'Showcase financial targets, funding stages, and traction',
@@ -19,7 +19,7 @@ const RolesSection = () => {
       icon: '💼',
       title: 'Investor',
       description: 'Angel investors, syndicates, and venture funds looking to back promising businesses.',
-      highlightColor: '#0ea5e9',
+      highlightColor: '#C0C0C0',
       features: [
         'Explore curated marketplace of verified businesses',
         'Filter listings by sector, capital target, and location',

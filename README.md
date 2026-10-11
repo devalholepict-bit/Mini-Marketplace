@@ -79,6 +79,79 @@ MeuLink bridges the gap between early-stage companies and capital providers:
   - Race condition protection: Atomic conditional query prevents concurrent conflicting updates.
 - **Privacy Gating Integration**: Accepted interest status automatically unlocks access to `privatePitchLink` and `contactEmail` on the business detail endpoint `GET /api/businesses/:id`.
 
+### Stage 7: Role-Based Dashboard Statistics & Idempotent Seed Script
+- **Role-Based Dashboard API (`GET /api/dashboard/stats`)**:
+  - Authenticated endpoint deriving dashboard context strictly from verified token identity (`req.user.role` and `req.user._id`), rejecting client-supplied IDs.
+  - **Business Dashboard**: Returns `profileExists`, `isPublished`, and received interest counts broken down into `total`, `pending`, `accepted`, and `declined`. Returns zeroed metrics when profile is absent.
+  - **Investor Dashboard**: Calculates count of `availableBusinesses` (published marketplace ventures), `savedBusinesses` (investor's active, published bookmarks), and sent interest breakdown.
+  - **Mongoose Aggregation Pipeline**: Employs `$match` ➔ `$group` by `$status` (`{ $sum: 1 }`) for fast database-level calculation instead of loading documents into Node.js loops. Missing statuses normalize safely to 0.
+- **Idempotent Demo Data Seed Script (`npm run seed`)**:
+  - Standalone script located at `server/src/seed/seed.js` executed via `npm run seed`.
+  - Environment safeguards: reads `SEED_DEMO_PASSWORD` from environment, strictly blocks execution when `NODE_ENV === 'production'`, and never logs credentials.
+  - Non-destructive & idempotent: checks record existence prior to creation; never runs `deleteMany()` or collection drops; preserves existing demo users, business profiles, and interest statuses without duplicate collisions.
+
+### Stage 8: React Authentication, Protected Routes and Dashboard Foundation
+- **AuthContext & Token Management**: Persistent authentication state in React context, persisting JWT token in `localStorage`, automatic session restoration on app boot via `GET /api/auth/me`.
+- **Form Workflows**: Dedicated Login (`/login`) and Register (`/register`) pages with role toggle (`business` vs `investor`), client-side validation, and centralized API errors.
+- **Route Guardrails**: Reusable `ProtectedRoute` with role whitelist and fallback to intended routes, plus `GuestRoute` redirecting authenticated users away from auth forms.
+- **Shared Application Shell**: `AppLayout` with role-aware header navigation, dynamic badge displays, and responsive container layout.
+
+### Stage 9: Complete Functional Frontend (Investor & Business Workflows)
+- **Monochrome & Silver Design System**:
+  - Refined fintech aesthetic featuring Near-black (`#0A0A0A`), Pure black (`#000000`), White (`#FFFFFF`), Off-white (`#F5F5F3`), and Silver accents (`#C0C0C0`).
+  - Typography: Elegant serif headings (`Georgia, "Times New Roman", serif`) combined with system sans-serif body typography.
+  - Subtle metallic styling for MeuLink wordmark, dividers, and status indicators without rainbow badges or loud gradients.
+- **Investor Marketplace Discovery (`/marketplace`)**:
+  - Live querying via `GET /api/businesses` with server-side full-text search (`q`), industry, stage, country, and funding range filters (`minFunding`, `maxFunding`).
+  - Sort selectors (`createdAt`, `fundingGoal`, `name`) with ascending/descending order.
+  - Synchronized pagination controls (`page`, `limit`, `total`, `totalPages`) resetting safely on filter changes.
+  - Marketplace cards displaying public-safe metrics (industry, stage, revenue range, target funding) while strictly concealing private pitch links and contact emails.
+  - Bookmark controls with server synchronization via `POST /api/investor/saved/:businessId` and `DELETE /api/investor/saved/:businessId`.
+- **Business Detail View (`/businesses/:id`)**:
+  - Retrieves comprehensive venture profile via `GET /api/businesses/:id`.
+  - Privacy gating: Displays `contactEmail` and `privatePitchLink` exclusively when returned in an authorized response by the backend (for the owner or an approved investor).
+  - Bookmark save/unsave action for investors.
+  - Expression of Interest submission form: sends `{ businessId, message }` (1-1000 characters) via `POST /api/interests`, handling HTTP 409 duplicate conflicts gracefully.
+  - Founder awareness: Identifies owning founder and offers direct transition to the profile editor.
+- **Investor Saved Businesses (`/saved`)**:
+  - Dedicated watchlist interface powered by `GET /api/investor/saved`.
+  - Instant removal action with optimistic/synchronized UI update via `DELETE /api/investor/saved/:businessId`.
+  - Empty state with direct shortcut to the marketplace.
+- **Investor Sent Interests History (`/interests/sent`)**:
+  - Displays outgoing notes and submission dates via `GET /api/interests/sent`.
+  - Understated monochrome `StatusLabel` pills (`pending`, `accepted`, `declined`).
+  - Resilient rendering with safe fallback labels for deleted/unavailable business profiles.
+  - Direct links to corresponding business detail pages.
+- **Business Profile Management (`/business/profile`)**:
+  - Founder console powered by `GET /api/businesses/me` and `PUT /api/businesses/me`.
+  - Auto-initializes on HTTP 404 with clean profile creation form.
+  - Comprehensive field coverage: name, tagline, description, industry, stage, country, city, fundingGoal, revenueRange, purpose, privatePitchLink, contactEmail.
+  - Safe submission: excludes database operators, `owner`, and `isPublished` from standard profile update payloads.
+  - Dedicated publication controller: toggles visibility in the marketplace via `PATCH /api/businesses/me/publish` with validation feedback for incomplete profiles.
+- **Business Incoming Interests Management (`/interests/received`)**:
+  - Displays investor outreach inquiries via `GET /api/interests/received` with sanitized investor identifying details.
+  - Action controls: Accept / Decline buttons for `pending` inquiries via `PATCH /api/interests/:id/status`.
+  - Terminal locks: disables repeated interactions, shows static decision labels for resolved records, and handles HTTP 409 conflict.
+- **Connected Dashboard (`/dashboard`)**:
+  - Live aggregated metrics from `GET /api/dashboard/stats`.
+  - Direct workflow navigation shortcuts for both roles.
+
+### Stage 10: Final QA, Security Audit, Bug Fixes and Submission
+- **Security & Session Hardening**:
+  - Migrated client JWT token storage from `localStorage` to `sessionStorage` in `AuthContext`, ensuring automatic token destruction upon browser/tab closure and isolating concurrent multi-role demo testing tabs.
+  - Verified password protection: passwords hashed via bcrypt (cost factor 10), hidden by default via `select: false`, never returned in API payloads or printed in logs.
+  - Generic authentication errors preventing user account enumeration (`Invalid email or password`).
+  - Gated private business fields (`privatePitchLink`, `contactEmail`) strictly enforced by the backend on `GET /api/businesses/:id` for owners and approved investors only.
+  - Zod validation and MongoDB operator injection prevention on all API endpoints.
+- **Client Routing & UX Resilience**:
+  - Hardened not-found/error route transitions in `BusinessDetailPage` with role-aware back-links (directing investors to `/marketplace` and founders to `/dashboard`).
+  - Replaced native `<a>` anchor tags with React Router `<Link>` components in `BusinessProfilePage` to preserve SPA state without full page reloads.
+- **Demo Seeding Audit**:
+  - Verified `server/src/seed/seed.js` environment safeguards (`NODE_ENV === 'production'` termination, missing `SEED_DEMO_PASSWORD` exit code 1, non-destructive creation preserving existing user records).
+- **Automated Verification**:
+  - 143 unit and integration tests passing across 11 Jest suites with 100% offline isolation.
+  - Clean Vite production build with zero errors.
+
 ---
 
 ## Project Structure
@@ -113,6 +186,7 @@ MeuLink/
 │   │   ├── controllers/
 │   │   │   ├── auth.controller.js
 │   │   │   ├── business.controller.js
+│   │   │   ├── dashboard.controller.js
 │   │   │   ├── health.controller.js
 │   │   │   ├── interest.controller.js
 │   │   │   └── saved.controller.js
@@ -128,10 +202,12 @@ MeuLink/
 │   │   ├── routes/
 │   │   │   ├── auth.routes.js
 │   │   │   ├── business.routes.js
+│   │   │   ├── dashboard.routes.js
 │   │   │   ├── health.routes.js
 │   │   │   ├── interest.routes.js
 │   │   │   └── saved.routes.js
 │   │   ├── seed/
+│   │   │   └── seed.js
 │   │   ├── utils/
 │   │   │   └── jwt.js
 │   │   ├── validators/
@@ -146,11 +222,13 @@ MeuLink/
 │   │   ├── auth.routes.test.js
 │   │   ├── business.discovery.test.js
 │   │   ├── business.routes.test.js
+│   │   ├── dashboard.routes.test.js
 │   │   ├── health.test.js
 │   │   ├── interest.routes.test.js
 │   │   ├── jwt.test.js
 │   │   ├── models.test.js
-│   │   └── saved.routes.test.js
+│   │   ├── saved.routes.test.js
+│   │   └── seed.test.js
 │   ├── .env.example
 │   └── package.json
 ├── .gitignore
@@ -508,6 +586,77 @@ Allows a business founder (`role: "business"`) to accept or decline a pending in
 
 ---
 
+### 6. Dashboard Statistics Endpoints (`/api/dashboard`)
+
+Provides aggregated performance, portfolio, and engagement metrics partitioned by user role.
+
+#### `GET /api/dashboard/stats`
+Retrieves role-tailored dashboard metrics for the authenticated user (`Authorization: Bearer <token>`).
+- **Role Detection**: Determines the dashboard view exclusively from `req.user.role`. Never accepts user or business IDs from request bodies or query parameters.
+- **Aggregation Strategy**: Uses a Mongoose aggregation pipeline (`$match` ➔ `$group` on `$status` with `{ $sum: 1 }`). Ensures missing status groups normalize to `0` rather than `undefined`.
+
+**Business Role Response (Active Profile):**
+```json
+{
+  "success": true,
+  "role": "business",
+  "stats": {
+    "profileExists": true,
+    "isPublished": true,
+    "interestsReceived": {
+      "total": 5,
+      "pending": 2,
+      "accepted": 2,
+      "declined": 1
+    }
+  }
+}
+```
+
+**Business Role Response (No Profile Yet):**
+```json
+{
+  "success": true,
+  "role": "business",
+  "stats": {
+    "profileExists": false,
+    "isPublished": false,
+    "interestsReceived": {
+      "total": 0,
+      "pending": 0,
+      "accepted": 0,
+      "declined": 0
+    }
+  }
+}
+```
+
+**Investor Role Response:**
+```json
+{
+  "success": true,
+  "role": "investor",
+  "stats": {
+    "availableBusinesses": 12,
+    "savedBusinesses": 4,
+    "interestsSent": {
+      "total": 6,
+      "pending": 2,
+      "accepted": 3,
+      "declined": 1
+    }
+  }
+}
+```
+
+- **Metric Definitions:**
+  - `availableBusinesses`: Total published businesses (`isPublished: true`) discoverable across the marketplace.
+  - `savedBusinesses`: Authenticated investor's saved ventures that are currently published and still exist.
+  - `interestsSent` / `interestsReceived`: Status breakdown calculated via database-level `$group` aggregation.
+- **Privacy & Sanitization**: Never leaks passwords, hashes, contact emails, private pitch links, or database internals.
+
+---
+
 ## Authorization & Security Rules
 
 - **Identity Derivation**: Profile ownership is always derived from the verified token's `sub` claim (`req.user._id`).
@@ -530,12 +679,51 @@ CLIENT_URL=http://localhost:5173
 MONGODB_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/meulink?retryWrites=true&w=majority
 JWT_SECRET=your_secure_256_bit_secret_key_here
 JWT_EXPIRES_IN=1d
+
+# Stage 7: Dedicated password for running demo seed script
+SEED_DEMO_PASSWORD=your_secure_demo_seed_password_here
 ```
 
 ### Configuring Frontend in `client/.env`
 ```env
 VITE_API_URL=http://localhost:5000/api
 ```
+
+---
+
+## Running the Seed Script
+
+A dedicated, safe demo data seed script is provided for local exploration and internship evaluations.
+
+### Prerequisites & Configuration
+1. Ensure `MONGODB_URI` is configured in `server/.env`.
+2. Set a local `SEED_DEMO_PASSWORD` in `server/.env` (e.g. `SEED_DEMO_PASSWORD=DemoPassword123!`).
+3. The script will refuse to run and safely terminate if `SEED_DEMO_PASSWORD` is missing or if `NODE_ENV === 'production'`.
+
+### Running the Seed
+From the root repository directory:
+```bash
+npm run seed
+```
+Or directly inside the server directory:
+```bash
+npm --prefix server run seed
+```
+
+### Demo Accounts Created
+All demo accounts are initialized using the password you set in `SEED_DEMO_PASSWORD`:
+
+| Role | Account Name | Demo Email | Notes |
+| :--- | :--- | :--- | :--- |
+| `investor` | Demo Investor (Atlas Syndicate) | `demo.investor@meulink.dev` | Has sent interests (1 accepted, 1 pending) and 1 saved venture. |
+| `investor` | Demo Angel (Helena Silva) | `demo.angel@meulink.dev` | Has sent interest (1 declined) and 1 saved venture. |
+| `business` | Demo Founder (Dr. Sofia Mendes) | `demo.founder1@meulink.dev` | Owns published venture *ApexQuantum Therapeutics* (BioTech). |
+| `business` | Demo Founder (Marco Silva) | `demo.founder2@meulink.dev` | Owns published venture *VerdeGrid Energy Systems* (CleanTech). |
+
+### Idempotency & Data Safety Guarantees
+- **Non-Destructive**: Never calls `deleteMany()`, never drops collections, and never alters unrelated user accounts.
+- **Idempotent**: Safe to run repeatedly. Existing users, business profiles, and expressions of interest are detected by unique keys and preserved as-is.
+- **Credential Protection**: Uses standard Mongoose `User.create()` so passwords are automatically salted and hashed via bcrypt; passwords and secrets are never logged.
 
 ---
 
@@ -566,7 +754,9 @@ All unit and integration tests execute completely offline without mutating remot
   ```bash
   npm test
   ```
-  Included test suites (123 tests across 9 suites):
+  Included test suites (143 tests across 11 suites):
+  - `tests/dashboard.routes.test.js`: 12 Supertest tests verifying 401 unauthenticated guardrail, business stats isolation, investor stats isolation, aggregation pipeline accuracy, missing status zero-normalization, zeroed response when profile is missing, saved-business filtering for published/existing ventures only, and privacy protection.
+  - `tests/seed.test.js`: 8 unit and integration tests verifying missing password fail-safe, production environment blocking, initial creation, and idempotent preservation on repeated runs without duplication.
   - `tests/interest.routes.test.js`: 30 Supertest tests verifying 401/403 authorization, valid interest creation (201), duplicate prevention via compound unique index (`E11000` & app check -> 409), input validation (400), sent/received isolation, password hash protection, owner acceptance/declining (200), terminal status locking (409), atomic conditional updates under concurrency, and private field unlocking integration.
   - `tests/saved.routes.test.js`: 17 Supertest tests verifying 401/403 authorization, atomic `$addToSet` bookmarking, idempotency, unpublished/nonexistent rejection (404), public-safe serialization, resilient missing reference handling, and atomic `$pull` unsaving.
   - `tests/business.discovery.test.js`: 17 Supertest tests verifying marketplace listing, search regex safety, multi-field filtering, funding goal range validation, pagination metadata, sorting, detail view access, and role-based private field exposure.
@@ -591,10 +781,10 @@ All unit and integration tests execute completely offline without mutating remot
 4. **Stage 4 (Completed)**: Business Profile Management (Owner profile CRUD, safe upsert, and publish controls)
 5. **Stage 5 (Completed)**: Business Discovery, Search, Filters & Pagination (Marketplace listing, safe search, filters, private field gating)
 6. **Stage 6 (Completed)**: Saved Businesses and Interest Management (Investor bookmarking, atomic interest pipeline, unique compound index constraint, terminal status lock)
-7. **Stage 7**: Expressions of Interest Notifications & Real-Time Updates
-8. **Stage 8**: Frontend Dashboard & Role Views (Business management & Investor discovery views)
-9. **Stage 9**: Seed Script & Demo Data Generation
-10. **Stage 10**: End-to-End Integration, Security Hardening & Final Polish
+7. **Stage 7 (Completed)**: Role-Based Dashboard Statistics and Seed Data (Mongoose `$match` ➔ `$group` aggregation pipeline, role-tailored stats, safe idempotent demo seed script)
+8. **Stage 8 (Completed)**: React Authentication, Protected Routes and Dashboard Foundation (AuthContext, ProtectedRoute, role guardrails, and dashboard foundations)
+9. **Stage 9 (Completed)**: Complete Functional Frontend (Monochrome & silver design system, investor marketplace & filters, business detail view & privacy gating, saved bookmarks, sent/received interest pipelines, and profile editor with publication control)
+10. **Stage 10 (Completed)**: Final QA, Security Audit, Bug Fixes, Session Storage Hardening & Submission
 
 ---
 
@@ -610,3 +800,8 @@ Use the table below to document tasks completed with AI assistance:
 | *Stage 4 Business Profile Management* | *Antigravity* | *Implemented GET/PUT/PATCH owner profile routes, Zod validation, safe upsert logic preserving isPublished, owner ID lock to req.user._id, and investor 403 access control* | *Executed 53 Jest tests across 6 suites (100% passing) and verified Vite production build* |
 | *Stage 5 Business Discovery & Search* | *Antigravity* | *Implemented GET /api/businesses with Zod query validation, safe regex escaping, multi-field filters, pagination metadata, and GET /api/businesses/:id with private field gating (owner vs accepted investor)* | *Executed 76 Jest tests across 7 suites (100% passing) and verified Vite production build* |
 | *Stage 6 Saved Businesses & Interest Management* | *Antigravity* | *Implemented /api/investor/saved (POST/GET/DELETE) with $addToSet/$pull and safe fields, /api/interests (create, sent, received, status PATCH) with E11000->409 handling, atomic conditional findOneAndUpdate status transitions, terminal locks, and private data unlocking* | *Executed 123 Jest tests across 9 suites (100% passing) and verified Vite production build* |
+| *Stage 7 Role-Based Dashboard Statistics & Seed Script* | *Antigravity* | *Implemented GET /api/dashboard/stats with Mongoose $match/$group status aggregation, role-based metrics isolation (business vs investor), safe zero normalization, and idempotent non-destructive seed script (server/src/seed/seed.js, npm run seed) with environment validation and credential safety* | *Executed 143 Jest tests across 11 suites (100% passing), verified Vite production build, and confirmed seed script CLI fail-safe* |
+| *Stage 8 React Authentication & Protected Routing* | *Antigravity* | *Implemented AuthContext with token in localStorage, session restoration via /api/auth/me, ProtectedRoute with role whitelisting, GuestRoute, LoginPage, RegisterPage, and AppLayout shell* | *Verified Vite production build (100 modules transformed) and executed all 143 backend test suites* |
+| *Stage 9 Complete Functional Frontend* | *Antigravity* | *Implemented monochrome & silver design system (Georgia typography, subtle metallic accents), MarketplacePage with real query/filters/pagination, BusinessDetailPage with authorized private field gating, SavedBusinessesPage with remove sync, SentInterestsPage, BusinessProfilePage with publication toggle, ReceivedInterestsPage with Accept/Decline, and updated DashboardPage* | *Ran Vite production build (113 modules transformed in 1.1s) and executed 143 backend tests across 11 suites (100% passing)* |
+| *Stage 10 Final QA, Security Audit & Submission* | *Antigravity* | *Migrated AuthContext to sessionStorage for safe session boundaries, fixed 404 role-aware back-links in BusinessDetailPage, replaced native anchors with React Router Link components, audited seed script safeguards, verified all 6 root scripts, and audited security & privacy rules* | *Executed all 143 Jest tests across 11 suites (100% passing), verified root npm run build (113 modules, 1.1s), tested seed fail-safe, and completed Git submission review* |
+

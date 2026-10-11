@@ -30,6 +30,64 @@ export const checkApiHealth = async () => {
 };
 
 /**
+ * Register a new user account
+ * @param {Object} payload - { name, email, password, role }
+ */
+export const registerUser = async ({ name, email, password, role }) => {
+  try {
+    const response = await apiClient.post('/auth/register', { name, email, password, role });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Registration failed'
+    };
+  }
+};
+
+/**
+ * Authenticate existing user
+ * @param {Object} payload - { email, password }
+ */
+export const loginUser = async ({ email, password }) => {
+  try {
+    const response = await apiClient.post('/auth/login', { email, password });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Login failed'
+    };
+  }
+};
+
+/**
+ * Get currently authenticated user profile
+ * @param {string} token - JWT token
+ */
+export const getCurrentUser = async (token) => {
+  try {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await apiClient.get('/auth/me', { headers });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Failed to fetch user profile'
+    };
+  }
+};
+
+/**
  * Fetches published businesses for marketplace discovery
  * @param {Object} params - Query params (q, industry, stage, country, minFunding, maxFunding, page, limit, sortBy, order)
  * @param {string} [token] - Optional JWT token for authenticated investor
@@ -66,7 +124,73 @@ export const getBusinessById = async (id, token = null) => {
   } catch (error) {
     return {
       success: false,
-      error: error.response?.data?.message || error.message || 'Failed to fetch business details'
+      error: error.response?.data?.message || error.message || 'Failed to fetch business details',
+      status: error.response?.status
+    };
+  }
+};
+
+/**
+ * Fetches the authenticated business owner's profile
+ * @param {string} token - JWT token
+ */
+export const getMyBusiness = async (token = null) => {
+  try {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await apiClient.get('/businesses/me', { headers });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Failed to fetch business profile',
+      status: error.response?.status
+    };
+  }
+};
+
+/**
+ * Creates or updates the authenticated business owner's profile
+ * @param {Object} profileData - Business profile attributes
+ * @param {string} token - JWT token
+ */
+export const upsertMyBusiness = async (profileData, token = null) => {
+  try {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await apiClient.put('/businesses/me', profileData, { headers });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Failed to save business profile',
+      status: error.response?.status
+    };
+  }
+};
+
+/**
+ * Updates publication status of the authenticated business owner's profile
+ * @param {boolean} isPublished - Publication flag
+ * @param {string} token - JWT token
+ */
+export const setPublishStatus = async (isPublished, token = null) => {
+  try {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await apiClient.patch('/businesses/me/publish', { isPublished }, { headers });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Failed to update publication status',
+      status: error.response?.status
     };
   }
 };
@@ -149,7 +273,8 @@ export const createInterest = async ({ businessId, message }, token = null) => {
   } catch (error) {
     return {
       success: false,
-      error: error.response?.data?.message || error.message || 'Failed to submit expression of interest'
+      error: error.response?.data?.message || error.message || 'Failed to submit expression of interest',
+      status: error.response?.status
     };
   }
 };
@@ -169,7 +294,8 @@ export const getSentInterests = async (token = null) => {
   } catch (error) {
     return {
       success: false,
-      error: error.response?.data?.message || error.message || 'Failed to fetch sent interests'
+      error: error.response?.data?.message || error.message || 'Failed to fetch sent interests',
+      status: error.response?.status
     };
   }
 };
@@ -189,7 +315,8 @@ export const getReceivedInterests = async (token = null) => {
   } catch (error) {
     return {
       success: false,
-      error: error.response?.data?.message || error.message || 'Failed to fetch received interests'
+      error: error.response?.data?.message || error.message || 'Failed to fetch received interests',
+      status: error.response?.status
     };
   }
 };
@@ -211,7 +338,28 @@ export const updateInterestStatus = async (interestId, status, token = null) => 
   } catch (error) {
     return {
       success: false,
-      error: error.response?.data?.message || error.message || 'Failed to update interest status'
+      error: error.response?.data?.message || error.message || 'Failed to update interest status',
+      status: error.response?.status
+    };
+  }
+};
+
+/**
+ * Fetch role-based dashboard statistics for authenticated user
+ * @param {string} [token] - JWT token
+ */
+export const getDashboardStats = async (token = null) => {
+  try {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await apiClient.get('/dashboard/stats', { headers });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Failed to fetch dashboard statistics'
     };
   }
 };
