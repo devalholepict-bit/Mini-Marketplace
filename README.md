@@ -62,6 +62,23 @@ MeuLink bridges the gap between early-stage companies and capital providers:
 - **Deterministic Pagination & Sorting**: Implements `skip`, `limit` (max 50, default 12), and sorting (`createdAt`, `fundingGoal`, `name`) with `_id` tie-breaker. Returns clean metadata (`page`, `limit`, `total`, `totalPages`).
 - **Role-Based Private Field Protection**: Detail view (`GET /api/businesses/:id`) exposes `privatePitchLink` and `contactEmail` only to the owner or an investor with an `accepted` Interest status. All public listing responses strictly omit private fields.
 
+### Stage 6: Saved Businesses and Interest Management
+- **Saved Businesses API (`/api/investor/saved`)**:
+  - `POST /api/investor/saved/:businessId`: Atomic addition to `User.savedBusinesses` via `$addToSet`, preventing duplicates. Restricted to published ventures and investor role.
+  - `GET /api/investor/saved`: Returns public-safe business representations for the authenticated investor only; strictly omits `privatePitchLink` and `contactEmail`, safely excludes unpublished or deleted businesses.
+  - `DELETE /api/investor/saved/:businessId`: Idempotent atomic removal via `$pull`, ensuring investors can never modify others' bookmarks.
+- **Interest Submission & Unique Constraint (`POST /api/interests`)**:
+  - Investor submission with Zod validation (non-empty trimmed message up to 1000 characters).
+  - Enforces database-level compound unique index on `{ investor: 1, business: 1 }`, translating duplicate attempts (and MongoDB `E11000` errors) into HTTP 409 Conflict.
+- **Sent & Received Interest History**:
+  - `GET /api/interests/sent`: Returns authenticated investor's sent history with safe public business details (sorted newest first).
+  - `GET /api/interests/received`: Returns incoming interests received by the authenticated founder's business profile with sanitized investor sender information (passwords and secrets never exposed).
+- **Atomic Status Transitions & Terminal Lock (`PATCH /api/interests/:id/status`)**:
+  - Conditional atomic update `findOneAndUpdate` matching `business: ownerBusiness._id` and `status: 'pending'`, strictly transitioning from `pending` to `accepted` or `declined`.
+  - Immutable terminal state: HTTP 409 Conflict if attempting to modify an interest that has already been resolved (`accepted` or `declined`). Resets to `pending` are rejected with HTTP 400.
+  - Race condition protection: Atomic conditional query prevents concurrent conflicting updates.
+- **Privacy Gating Integration**: Accepted interest status automatically unlocks access to `privatePitchLink` and `contactEmail` on the business detail endpoint `GET /api/businesses/:id`.
+
 ---
 
 ## Project Structure
@@ -96,7 +113,9 @@ MeuLink/
 │   │   ├── controllers/
 │   │   │   ├── auth.controller.js
 │   │   │   ├── business.controller.js
-│   │   │   └── health.controller.js
+│   │   │   ├── health.controller.js
+│   │   │   ├── interest.controller.js
+│   │   │   └── saved.controller.js
 │   │   ├── middleware/
 │   │   │   ├── auth.middleware.js
 │   │   │   ├── authorize.middleware.js
@@ -109,13 +128,17 @@ MeuLink/
 │   │   ├── routes/
 │   │   │   ├── auth.routes.js
 │   │   │   ├── business.routes.js
-│   │   │   └── health.routes.js
+│   │   │   ├── health.routes.js
+│   │   │   ├── interest.routes.js
+│   │   │   └── saved.routes.js
 │   │   ├── seed/
 │   │   ├── utils/
 │   │   │   └── jwt.js
 │   │   ├── validators/
 │   │   │   ├── auth.validator.js
-│   │   │   └── business.validator.js
+│   │   │   ├── business.validator.js
+│   │   │   ├── interest.validator.js
+│   │   │   └── saved.validator.js
 │   │   ├── app.js
 │   │   └── server.js
 │   ├── tests/
@@ -124,8 +147,10 @@ MeuLink/
 │   │   ├── business.discovery.test.js
 │   │   ├── business.routes.test.js
 │   │   ├── health.test.js
+│   │   ├── interest.routes.test.js
 │   │   ├── jwt.test.js
-│   │   └── models.test.js
+│   │   ├── models.test.js
+│   │   └── saved.routes.test.js
 │   ├── .env.example
 │   └── package.json
 ├── .gitignore
@@ -277,6 +302,212 @@ Authenticated detail endpoint for a single business profile.
 
 ---
 
+### 4. Saved Businesses Endpoints (`/api/investor/saved`)
+
+All saved-business endpoints require authentication and the `investor` role (`Authorization: Bearer <investor_token>`).
+
+#### `POST /api/investor/saved/:businessId`
+Saves a published business profile to the authenticated investor's bookmark list (`User.savedBusinesses`).
+- **URL Parameter**: `businessId` (24-character hex ObjectId).
+- **Behavior**: Uses atomic `$addToSet` to guarantee idempotency; repeating a save will not create duplicate entries.
+- **Access Control & Visibility**: Target business must exist and have `isPublished: true`.
+- **Status Responses**:
+  - `HTTP 200 OK`: Business successfully saved (or already saved).
+  - `HTTP 400 Bad Request`: Malformed `businessId` parameter.
+  - `HTTP 401 Unauthorized`: Missing or invalid JWT.
+  - `HTTP 403 Forbidden`: Authenticated user is not an investor.
+  - `HTTP 404 Not Found`: Target business does not exist or is unpublished.
+
+**Response Example (HTTP 200 OK):**
+```json
+{
+  "success": true,
+  "message": "Business saved successfully",
+  "savedBusinesses": [
+    "65f01234567890abcdef0001"
+  ]
+}
+```
+
+#### `GET /api/investor/saved`
+Retrieves the authenticated investor's saved businesses.
+- **Behavior**: Retrieves saved businesses strictly for `req.user._id`.
+- **Privacy**: Returns public-safe business fields only. `privatePitchLink` and `contactEmail` are **never** exposed in this collection.
+- **Resilience**: Safely omits any referenced businesses that were unpublished or deleted without crashing.
+
+**Response Example (HTTP 200 OK):**
+```json
+{
+  "success": true,
+  "count": 1,
+  "data": [
+    {
+      "id": "65f01234567890abcdef0001",
+      "name": "EcoEnergy Labs",
+      "tagline": "Solar and flow-battery storage solutions",
+      "description": "Next generation commercial clean energy storage systems for urban power grids.",
+      "industry": "CleanTech",
+      "country": "Portugal",
+      "city": "Lisbon",
+      "stage": "Seed",
+      "revenueRange": "€50k - €200k ARR",
+      "fundingGoal": 500000,
+      "purpose": "R&D expansion and CE certification testing",
+      "createdAt": "2026-01-10T10:00:00.000Z"
+    }
+  ]
+}
+```
+
+#### `DELETE /api/investor/saved/:businessId`
+Removes a business from the authenticated investor's saved bookmarks.
+- **URL Parameter**: `businessId` (24-character hex ObjectId).
+- **Behavior**: Uses atomic `$pull` scoped strictly to `req.user._id`. Repeating an unsave request is idempotent and does not produce an error if the business was already absent.
+- **Status Responses**:
+  - `HTTP 200 OK`: Business removed from saved list.
+  - `HTTP 400 Bad Request`: Malformed `businessId` parameter.
+  - `HTTP 401 Unauthorized`: Missing or invalid JWT.
+  - `HTTP 403 Forbidden`: Authenticated user is not an investor.
+
+---
+
+### 5. Expressions of Interest Endpoints (`/api/interests`)
+
+Manages the investor connection and introduction pipeline.
+
+#### `POST /api/interests`
+Allows an investor (`role: "investor"`) to submit an expression of investment interest to a published business.
+- **Body**:
+  ```json
+  {
+    "businessId": "65f01234567890abcdef0001",
+    "message": "We lead seed rounds in CleanTech and would like to review your data room."
+  }
+  ```
+- **Validation**:
+  - `businessId`: Valid 24-hex ObjectId of an existing, published business (`isPublished: true`).
+  - `message`: Non-empty trimmed string between 1 and 1000 characters.
+  - Strict payload validation rejects client-injected `investor`, `status`, or internal fields.
+- **Duplicate Prevention (HTTP 409 Conflict)**:
+  - Backed by compound unique index `{ investor: 1, business: 1 }`.
+  - Application-level pre-check and MongoDB `E11000` duplicate key handling prevent duplicate submissions and protect against concurrent race conditions.
+- **Status Responses**:
+  - `HTTP 201 Created`: Interest successfully created with initial status `pending`.
+  - `HTTP 400 Bad Request`: Validation failure or unrecognized body fields.
+  - `HTTP 401 Unauthorized`: Missing or invalid JWT.
+  - `HTTP 403 Forbidden`: User does not have `investor` role.
+  - `HTTP 404 Not Found`: Target business not found or not published.
+  - `HTTP 409 Conflict`: Investor has already submitted interest for this business.
+
+**Response Example (HTTP 201 Created):**
+```json
+{
+  "success": true,
+  "message": "Interest submitted successfully",
+  "data": {
+    "id": "65f01234567890abcdef8001",
+    "investor": "65f01234567890abcdef2001",
+    "business": "65f01234567890abcdef0001",
+    "message": "We lead seed rounds in CleanTech and would like to review your data room.",
+    "status": "pending",
+    "createdAt": "2026-10-11T13:45:00.000Z",
+    "updatedAt": "2026-10-11T13:45:00.000Z"
+  }
+}
+```
+
+#### `GET /api/interests/sent`
+Retrieves expressions of interest submitted by the authenticated investor (`role: "investor"`).
+- **Behavior**: Scoped strictly to `req.user._id`, sorted newest first (`createdAt: -1`).
+- **Privacy & Safety**: Populates public-safe business fields only. `privatePitchLink` and `contactEmail` are omitted. Missing/deleted businesses populate as `null` without crashing.
+
+**Response Example (HTTP 200 OK):**
+```json
+{
+  "success": true,
+  "count": 1,
+  "data": [
+    {
+      "id": "65f01234567890abcdef8001",
+      "message": "We lead seed rounds in CleanTech and would like to review your data room.",
+      "status": "pending",
+      "createdAt": "2026-10-11T13:45:00.000Z",
+      "updatedAt": "2026-10-11T13:45:00.000Z",
+      "business": {
+        "id": "65f01234567890abcdef0001",
+        "name": "EcoEnergy Labs",
+        "tagline": "Solar and flow-battery storage solutions",
+        "industry": "CleanTech",
+        "country": "Portugal",
+        "city": "Lisbon",
+        "stage": "Seed",
+        "fundingGoal": 500000,
+        "isPublished": true,
+        "createdAt": "2026-01-10T10:00:00.000Z"
+      }
+    }
+  ]
+}
+```
+
+#### `GET /api/interests/received`
+Retrieves expressions of interest received by the authenticated founder's business (`role: "business"`).
+- **Behavior**: Scoped to the authenticated owner's `Business` profile. Sorted newest first.
+- **Privacy & Sanitization**: Populates only safe investor identity fields (`id`, `name`, `email`). Investor passwords, hashes, and secrets are strictly excluded.
+- **Resilience**: Returns an empty array (`data: []`) if the founder has not published a business or has received no interests.
+
+**Response Example (HTTP 200 OK):**
+```json
+{
+  "success": true,
+  "count": 1,
+  "data": [
+    {
+      "id": "65f01234567890abcdef8001",
+      "message": "We lead seed rounds in CleanTech and would like to review your data room.",
+      "status": "pending",
+      "createdAt": "2026-10-11T13:45:00.000Z",
+      "updatedAt": "2026-10-11T13:45:00.000Z",
+      "investor": {
+        "id": "65f01234567890abcdef2001",
+        "name": "Alice Investor",
+        "email": "alice@investor.com"
+      }
+    }
+  ]
+}
+```
+
+#### `PATCH /api/interests/:id/status`
+Allows a business founder (`role: "business"`) to accept or decline a pending interest.
+- **URL Parameter**: `id` (24-character hex ObjectId of the Interest).
+- **Body**:
+  ```json
+  {
+    "status": "accepted"
+  }
+  ```
+- **Allowed Status Transitions**:
+  - `pending` ➔ `accepted` (Valid)
+  - `pending` ➔ `declined` (Valid)
+  - Any attempt to transition `accepted` ➔ `declined` returns **HTTP 409 Conflict**.
+  - Any attempt to transition `declined` ➔ `accepted` returns **HTTP 409 Conflict**.
+  - Any attempt to reset a terminal status back to `pending` returns **HTTP 400 Bad Request**.
+- **Atomic Concurrency Protection**:
+  - Implemented using conditional MongoDB `findOneAndUpdate` filtering by `_id`, `business: ownerBusiness._id`, and `status: 'pending'`.
+  - If two requests attempt concurrent transitions, exactly one succeeds atomically and the subsequent request receives **HTTP 409 Conflict**.
+- **Privacy Integration**:
+  - Transitioning an interest to `accepted` grants that investor access to the founder's `privatePitchLink` and `contactEmail` via `GET /api/businesses/:id`.
+- **Status Responses**:
+  - `HTTP 200 OK`: Interest status successfully updated.
+  - `HTTP 400 Bad Request`: Invalid status value or malformed ID.
+  - `HTTP 401 Unauthorized`: Missing or invalid JWT.
+  - `HTTP 403 Forbidden`: User does not have `business` role.
+  - `HTTP 404 Not Found`: Interest does not exist or does not belong to the founder's business profile.
+  - `HTTP 409 Conflict`: Interest has already reached a terminal state (`accepted` or `declined`).
+
+---
+
 ## Authorization & Security Rules
 
 - **Identity Derivation**: Profile ownership is always derived from the verified token's `sub` claim (`req.user._id`).
@@ -335,7 +566,9 @@ All unit and integration tests execute completely offline without mutating remot
   ```bash
   npm test
   ```
-  Included test suites:
+  Included test suites (123 tests across 9 suites):
+  - `tests/interest.routes.test.js`: 30 Supertest tests verifying 401/403 authorization, valid interest creation (201), duplicate prevention via compound unique index (`E11000` & app check -> 409), input validation (400), sent/received isolation, password hash protection, owner acceptance/declining (200), terminal status locking (409), atomic conditional updates under concurrency, and private field unlocking integration.
+  - `tests/saved.routes.test.js`: 17 Supertest tests verifying 401/403 authorization, atomic `$addToSet` bookmarking, idempotency, unpublished/nonexistent rejection (404), public-safe serialization, resilient missing reference handling, and atomic `$pull` unsaving.
   - `tests/business.discovery.test.js`: 17 Supertest tests verifying marketplace listing, search regex safety, multi-field filtering, funding goal range validation, pagination metadata, sorting, detail view access, and role-based private field exposure.
   - `tests/business.routes.test.js`: 14 Supertest tests verifying 401/403 authorization, 201 creation, 200 update upsert, isolation between owners, field injection prevention, validation, and publication toggling.
   - `tests/auth.routes.test.js`: Supertest integration tests for `register`, `login`, `me`, password hashing, duplicate detection, and sanitization.
@@ -357,8 +590,8 @@ All unit and integration tests execute completely offline without mutating remot
 3. **Stage 3 (Completed)**: Data Validation & Authentication Layer (JWT, bcrypt password hashing, Zod schemas, role-based authorization)
 4. **Stage 4 (Completed)**: Business Profile Management (Owner profile CRUD, safe upsert, and publish controls)
 5. **Stage 5 (Completed)**: Business Discovery, Search, Filters & Pagination (Marketplace listing, safe search, filters, private field gating)
-6. **Stage 6**: Saved Businesses API (Investor bookmarking functionality)
-7. **Stage 7**: Expressions of Interest API (Investor connection workflow & notifications)
+6. **Stage 6 (Completed)**: Saved Businesses and Interest Management (Investor bookmarking, atomic interest pipeline, unique compound index constraint, terminal status lock)
+7. **Stage 7**: Expressions of Interest Notifications & Real-Time Updates
 8. **Stage 8**: Frontend Dashboard & Role Views (Business management & Investor discovery views)
 9. **Stage 9**: Seed Script & Demo Data Generation
 10. **Stage 10**: End-to-End Integration, Security Hardening & Final Polish
@@ -376,3 +609,4 @@ Use the table below to document tasks completed with AI assistance:
 | *Stage 3 JWT Authentication & Role Authorization* | *Antigravity* | *Verified Zod schemas, pre-save bcrypt hashing, select: false password protection, JWT signing/verifying with sub claim, authenticate and authorize('business', 'investor') middleware, and 401/403/409 error mapping* | *Executed 39 Jest tests across 5 suites (100% passing) and verified Vite production build* |
 | *Stage 4 Business Profile Management* | *Antigravity* | *Implemented GET/PUT/PATCH owner profile routes, Zod validation, safe upsert logic preserving isPublished, owner ID lock to req.user._id, and investor 403 access control* | *Executed 53 Jest tests across 6 suites (100% passing) and verified Vite production build* |
 | *Stage 5 Business Discovery & Search* | *Antigravity* | *Implemented GET /api/businesses with Zod query validation, safe regex escaping, multi-field filters, pagination metadata, and GET /api/businesses/:id with private field gating (owner vs accepted investor)* | *Executed 76 Jest tests across 7 suites (100% passing) and verified Vite production build* |
+| *Stage 6 Saved Businesses & Interest Management* | *Antigravity* | *Implemented /api/investor/saved (POST/GET/DELETE) with $addToSet/$pull and safe fields, /api/interests (create, sent, received, status PATCH) with E11000->409 handling, atomic conditional findOneAndUpdate status transitions, terminal locks, and private data unlocking* | *Executed 123 Jest tests across 9 suites (100% passing) and verified Vite production build* |

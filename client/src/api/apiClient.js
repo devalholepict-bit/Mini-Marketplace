@@ -71,4 +71,149 @@ export const getBusinessById = async (id, token = null) => {
   }
 };
 
+/**
+ * Save a business for the authenticated investor
+ * @param {string} businessId - Business ID to save
+ * @param {string} [token] - JWT token
+ */
+export const saveBusiness = async (businessId, token = null) => {
+  try {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await apiClient.post(`/investor/saved/${businessId}`, {}, { headers });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Failed to save business'
+    };
+  }
+};
+
+/**
+ * Remove a saved business for the authenticated investor
+ * @param {string} businessId - Business ID to remove
+ * @param {string} [token] - JWT token
+ */
+export const removeSavedBusiness = async (businessId, token = null) => {
+  try {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await apiClient.delete(`/investor/saved/${businessId}`, { headers });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Failed to remove saved business'
+    };
+  }
+};
+
+/**
+ * Fetch saved businesses for the authenticated investor
+ * @param {string} [token] - JWT token
+ */
+export const getSavedBusinesses = async (token = null) => {
+  try {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await apiClient.get('/investor/saved', { headers });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Failed to fetch saved businesses'
+    };
+  }
+};
+
+/**
+ * Create an expression of interest in a business
+ * @param {Object} payload - { businessId, message }
+ * @param {string} [token] - JWT token
+ */
+export const createInterest = async ({ businessId, message }, token = null) => {
+  try {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await apiClient.post('/interests', { businessId, message }, { headers });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Failed to submit expression of interest'
+    };
+  }
+};
+
+/**
+ * Fetch expressions of interest sent by the authenticated investor
+ * @param {string} [token] - JWT token
+ */
+export const getSentInterests = async (token = null) => {
+  try {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await apiClient.get('/interests/sent', { headers });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Failed to fetch sent interests'
+    };
+  }
+};
+
+/**
+ * Fetch expressions of interest received by the authenticated business owner
+ * @param {string} [token] - JWT token
+ */
+export const getReceivedInterests = async (token = null) => {
+  try {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await apiClient.get('/interests/received', { headers });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Failed to fetch received interests'
+    };
+  }
+};
+
+/**
+ * Accept or decline an expression of interest
+ * @param {string} interestId - Interest ID
+ * @param {string} status - 'accepted' or 'declined'
+ * @param {string} [token] - JWT token
+ */
+export const updateInterestStatus = async (interestId, status, token = null) => {
+  try {
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const response = await apiClient.patch(`/interests/${interestId}/status`, { status }, { headers });
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message || 'Failed to update interest status'
+    };
+  }
+};
+
 export default apiClient;

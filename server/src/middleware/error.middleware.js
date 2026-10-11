@@ -16,6 +16,12 @@ const notFoundHandler = (req, res, next) => {
 const errorHandler = (err, req, res, next) => {
   // Handle MongoDB duplicate key error (E11000)
   if (err.code === 11000) {
+    if (err.keyPattern && (err.keyPattern.investor && err.keyPattern.business)) {
+      return res.status(409).json({
+        success: false,
+        message: 'You have already submitted an expression of interest for this business'
+      });
+    }
     const field = Object.keys(err.keyPattern || err.keyValue || {})[0] || 'record';
     const capitalizedField = field.charAt(0).toUpperCase() + field.slice(1);
     return res.status(409).json({
