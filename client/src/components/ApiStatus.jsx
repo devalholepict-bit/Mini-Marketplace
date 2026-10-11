@@ -76,6 +76,12 @@ const ApiStatus = () => {
               <span className="meta-value">{healthData.message}</span>
             </div>
             <div className="meta-item">
+              <span className="meta-label">Database Connection</span>
+              <span className="meta-value" style={{ textTransform: 'capitalize' }}>
+                {healthData.database || 'Not reported'}
+              </span>
+            </div>
+            <div className="meta-item">
               <span className="meta-label">Server Timestamp</span>
               <span className="meta-value">
                 {new Date(healthData.timestamp).toLocaleString()}
